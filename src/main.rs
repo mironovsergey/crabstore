@@ -1,8 +1,7 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 const VERSION: &str = "0.1.0";
-
-// ============ Модель данных ============
 
 #[derive(Debug, Clone)]
 struct Task {
@@ -10,14 +9,15 @@ struct Task {
     text: String,
     done: bool,
     priority: Priority,
+    tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Priority {
-    Low,
-    Normal,
-    High,
-    Critical,
+    Low = 1,
+    Normal = 2,
+    High = 3,
+    Critical = 4,
 }
 
 impl Priority {
@@ -39,15 +39,6 @@ impl Priority {
             Priority::Critical => "🔥",
         }
     }
-
-    fn label(&self) -> &str {
-        match self {
-            Priority::Low => "низкий",
-            Priority::Normal => "обычный",
-            Priority::High => "высокий",
-            Priority::Critical => "критический",
-        }
-    }
 }
 
 impl Task {
@@ -57,126 +48,38 @@ impl Task {
             text,
             done: false,
             priority: Priority::Normal,
+            tags: Vec::new(),
         }
     }
 
     fn display(&self) {
         let status = if self.done { "✓" } else { "○" };
-        let done_label = if self.done {
-            " (выполнено)"
+        let tags_str = if self.tags.is_empty() {
+            String::new()
         } else {
-            ""
+            format!(" [{}]", self.tags.join(", "))
         };
+
         println!(
             "[{}] {} #{} {}{}",
             status,
             self.priority.icon(),
             self.id,
             self.text,
-            done_label
+            tags_str
         );
     }
-}
 
-// ============ Команды как enum ============
-
-#[derive(Debug)]
-enum Command {
-    Help,
-    Add { text: String },
-    List,
-    Done { id: u32 },
-    Priority { id: u32, level: Priority },
-    Remove { id: u32 },
-    Quit,
-}
-
-#[derive(Debug)]
-enum ParseError {
-    EmptyInput,
-    UnknownCommand(String),
-    MissingArgument(&'static str),
-    InvalidId,
-    InvalidPriority,
-}
-
-impl ParseError {
-    fn message(&self) -> String {
-        match self {
-            ParseError::EmptyInput => "Введите команду".to_string(),
-            ParseError::UnknownCommand(cmd) => {
-                format!("Неизвестная команда: '{}'. Введите 'help'.", cmd)
-            }
-            ParseError::MissingArgument(arg) => {
-                format!("Не указан аргумент: {}", arg)
-            }
-            ParseError::InvalidId => "Неверный ID (должно быть число)".to_string(),
-            ParseError::InvalidPriority => "Неверный приоритет (должно быть 1-4)".to_string(),
+    fn add_tag(&mut self, tag: String) {
+        if !self.tags.contains(&tag) {
+            self.tags.push(tag);
         }
     }
-}
 
-fn parse_command(input: &str) -> Result<Command, ParseError> {
-    let input = input.trim();
-
-    if input.is_empty() {
-        return Err(ParseError::EmptyInput);
-    }
-
-    let parts: Vec<&str> = input.splitn(2, ' ').collect();
-    let cmd = parts[0];
-    let args = parts.get(1).copied().unwrap_or("");
-
-    match cmd {
-        "help" | "h" => Ok(Command::Help),
-
-        "add" | "a" => {
-            if args.is_empty() {
-                Err(ParseError::MissingArgument("текст задачи"))
-            } else {
-                Ok(Command::Add {
-                    text: args.to_string(),
-                })
-            }
-        }
-
-        "list" | "ls" => Ok(Command::List),
-
-        "done" | "d" => {
-            let id = args.parse::<u32>().map_err(|_| ParseError::InvalidId)?;
-            Ok(Command::Done { id })
-        }
-
-        "priority" | "p" => {
-            let parts: Vec<&str> = args.split_whitespace().collect();
-
-            if parts.len() < 2 {
-                return Err(ParseError::MissingArgument("id и приоритет"));
-            }
-
-            let id = parts[0].parse::<u32>().map_err(|_| ParseError::InvalidId)?;
-
-            let level_num = parts[1]
-                .parse::<u8>()
-                .map_err(|_| ParseError::InvalidPriority)?;
-
-            let level = Priority::from_u8(level_num).ok_or(ParseError::InvalidPriority)?;
-
-            Ok(Command::Priority { id, level })
-        }
-
-        "remove" | "rm" => {
-            let id = args.parse::<u32>().map_err(|_| ParseError::InvalidId)?;
-            Ok(Command::Remove { id })
-        }
-
-        "quit" | "q" | "exit" => Ok(Command::Quit),
-
-        other => Err(ParseError::UnknownCommand(other.to_string())),
+    fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|t| t == tag)
     }
 }
-
-// ============ Хранилище ============
 
 struct TaskStore {
     tasks: Vec<Task>,
@@ -207,7 +110,58 @@ impl TaskStore {
         Some(self.tasks.remove(pos))
     }
 
-    fn list(&self) -> &[Task] {
+    // Фильтрация по статусу
+    fn filter_by_done(&self, done: bool) -> Vec<&Task> {
+        self.tasks.iter().filter(|t| t.done == done).collect()
+    }
+
+    // Фильтрация по тегу
+    fn filter_by_tag(&self, tag: &str) -> Vec<&Task> {
+        self.tasks.iter().filter(|t| t.has_tag(tag)).collect()
+    }
+
+    // Фильтрация по приоритету
+    fn filter_by_priority(&self, priority: Priority) -> Vec<&Task> {
+        self.tasks
+            .iter()
+            .filter(|t| t.priority == priority)
+            .collect()
+    }
+
+    // Сортировка по приоритету
+    fn sorted_by_priority(&self) -> Vec<&Task> {
+        let mut sorted: Vec<&Task> = self.tasks.iter().collect();
+        sorted.sort_by(|a, b| b.priority.cmp(&a.priority)); // по убыванию
+        sorted
+    }
+
+    // Статистика по тегам
+    fn tag_stats(&self) -> HashMap<&str, usize> {
+        let mut stats: HashMap<&str, usize> = HashMap::new();
+
+        for task in &self.tasks {
+            for tag in &task.tags {
+                let count = stats.entry(tag.as_str()).or_insert(0);
+                *count += 1;
+            }
+        }
+
+        stats
+    }
+
+    // Статистика по приоритетам
+    fn priority_stats(&self) -> HashMap<Priority, usize> {
+        let mut stats: HashMap<Priority, usize> = HashMap::new();
+
+        for task in &self.tasks {
+            let count = stats.entry(task.priority).or_insert(0);
+            *count += 1;
+        }
+
+        stats
+    }
+
+    fn all(&self) -> &[Task] {
         &self.tasks
     }
 
@@ -222,14 +176,143 @@ impl TaskStore {
     }
 }
 
-// ============ Результат выполнения команды ============
+#[derive(Debug)]
+enum Command {
+    Help,
+    Add { text: String },
+    List { filter: Option<ListFilter> },
+    Done { id: u32 },
+    Priority { id: u32, level: Priority },
+    Tag { id: u32, tag: String },
+    Stats,
+    Remove { id: u32 },
+    Quit,
+}
+
+#[derive(Debug)]
+enum ListFilter {
+    Done,
+    Pending,
+    Priority(Priority),
+    Tag(String),
+    Sorted,
+}
+
+#[derive(Debug)]
+enum ParseError {
+    EmptyInput,
+    UnknownCommand(String),
+    MissingArgument(&'static str),
+    InvalidId,
+    InvalidPriority,
+}
+
+impl ParseError {
+    fn message(&self) -> String {
+        match self {
+            ParseError::EmptyInput => "Введите команду".to_string(),
+            ParseError::UnknownCommand(cmd) => {
+                format!("Неизвестная команда: '{}'", cmd)
+            }
+            ParseError::MissingArgument(arg) => {
+                format!("Не указан аргумент: {}", arg)
+            }
+            ParseError::InvalidId => "Неверный ID".to_string(),
+            ParseError::InvalidPriority => "Приоритет: 1-4".to_string(),
+        }
+    }
+}
+
+fn parse_command(input: &str) -> Result<Command, ParseError> {
+    let input = input.trim();
+
+    if input.is_empty() {
+        return Err(ParseError::EmptyInput);
+    }
+
+    let parts: Vec<&str> = input.splitn(2, ' ').collect();
+    let cmd = parts[0];
+    let args = parts.get(1).copied().unwrap_or("");
+
+    match cmd {
+        "help" | "h" => Ok(Command::Help),
+
+        "add" | "a" => {
+            if args.is_empty() {
+                Err(ParseError::MissingArgument("текст"))
+            } else {
+                Ok(Command::Add {
+                    text: args.to_string(),
+                })
+            }
+        }
+
+        "list" | "ls" => {
+            let filter = match args.trim() {
+                "" => None,
+                "done" => Some(ListFilter::Done),
+                "pending" | "todo" => Some(ListFilter::Pending),
+                "sorted" | "sort" => Some(ListFilter::Sorted),
+                arg if arg.starts_with("p:") => {
+                    let p = arg[2..]
+                        .parse::<u8>()
+                        .ok()
+                        .and_then(Priority::from_u8)
+                        .ok_or(ParseError::InvalidPriority)?;
+                    Some(ListFilter::Priority(p))
+                }
+                arg if arg.starts_with("#") => Some(ListFilter::Tag(arg[1..].to_string())),
+                _ => None,
+            };
+            Ok(Command::List { filter })
+        }
+
+        "done" | "d" => {
+            let id = args.parse().map_err(|_| ParseError::InvalidId)?;
+            Ok(Command::Done { id })
+        }
+
+        "priority" | "p" => {
+            let parts: Vec<&str> = args.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err(ParseError::MissingArgument("id и приоритет"));
+            }
+            let id = parts[0].parse().map_err(|_| ParseError::InvalidId)?;
+            let level = parts[1]
+                .parse::<u8>()
+                .ok()
+                .and_then(Priority::from_u8)
+                .ok_or(ParseError::InvalidPriority)?;
+            Ok(Command::Priority { id, level })
+        }
+
+        "tag" | "t" => {
+            let parts: Vec<&str> = args.split_whitespace().collect();
+            if parts.len() < 2 {
+                return Err(ParseError::MissingArgument("id и тег"));
+            }
+            let id = parts[0].parse().map_err(|_| ParseError::InvalidId)?;
+            let tag = parts[1].trim_start_matches('#').to_string();
+            Ok(Command::Tag { id, tag })
+        }
+
+        "stats" => Ok(Command::Stats),
+
+        "remove" | "rm" => {
+            let id = args.parse().map_err(|_| ParseError::InvalidId)?;
+            Ok(Command::Remove { id })
+        }
+
+        "quit" | "q" | "exit" => Ok(Command::Quit),
+
+        other => Err(ParseError::UnknownCommand(other.to_string())),
+    }
+}
 
 enum CommandResult {
     Continue,
     Quit,
 }
-
-// ============ Приложение ============
 
 struct App {
     store: TaskStore,
@@ -272,7 +355,6 @@ impl App {
 
         let mut input = String::new();
         io::stdin().read_line(&mut input).ok()?;
-
         Some(input)
     }
 
@@ -280,9 +362,11 @@ impl App {
         match cmd {
             Command::Help => self.cmd_help(),
             Command::Add { text } => self.cmd_add(text),
-            Command::List => self.cmd_list(),
+            Command::List { filter } => self.cmd_list(filter),
             Command::Done { id } => self.cmd_done(id),
             Command::Priority { id, level } => self.cmd_priority(id, level),
+            Command::Tag { id, tag } => self.cmd_tag(id, tag),
+            Command::Stats => self.cmd_stats(),
             Command::Remove { id } => self.cmd_remove(id),
             Command::Quit => return CommandResult::Quit,
         }
@@ -291,18 +375,19 @@ impl App {
 
     fn cmd_help(&self) {
         println!("Команды:");
-        println!("  add, a <текст>         — добавить задачу");
-        println!("  list, ls               — показать задачи");
-        println!("  done, d <id>           — отметить выполненной");
-        println!("  priority, p <id> <1-4> — установить приоритет");
-        println!("  remove, rm <id>        — удалить задачу");
-        println!("  quit, q                — выход");
-        println!();
-        println!("Приоритеты:");
-        println!("  1 — {} низкий", Priority::Low.icon());
-        println!("  2 — {} обычный", Priority::Normal.icon());
-        println!("  3 — {} высокий", Priority::High.icon());
-        println!("  4 — {} критический", Priority::Critical.icon());
+        println!("  add, a <текст>          — добавить задачу");
+        println!("  list, ls [фильтр]       — показать задачи");
+        println!("    list done             — только выполненные");
+        println!("    list pending          — только активные");
+        println!("    list sorted           — по приоритету");
+        println!("    list p:3              — по приоритету 3");
+        println!("    list #work            — по тегу");
+        println!("  done, d <id>            — отметить выполненной");
+        println!("  priority, p <id> <1-4>  — установить приоритет");
+        println!("  tag, t <id> <тег>       — добавить тег");
+        println!("  stats                   — статистика");
+        println!("  remove, rm <id>         — удалить");
+        println!("  quit, q                 — выход");
     }
 
     fn cmd_add(&mut self, text: String) {
@@ -310,21 +395,34 @@ impl App {
         println!("➕ Добавлена: #{} '{}'", task.id, task.text);
     }
 
-    fn cmd_list(&self) {
+    fn cmd_list(&self, filter: Option<ListFilter>) {
         if self.store.is_empty() {
             println!("Задач нет. Добавьте: add <текст>");
             return;
         }
 
-        println!("\n📋 Список задач:");
+        let tasks: Vec<&Task> = match filter {
+            None => self.store.all().iter().collect(),
+            Some(ListFilter::Done) => self.store.filter_by_done(true),
+            Some(ListFilter::Pending) => self.store.filter_by_done(false),
+            Some(ListFilter::Priority(p)) => self.store.filter_by_priority(p),
+            Some(ListFilter::Tag(ref tag)) => self.store.filter_by_tag(tag),
+            Some(ListFilter::Sorted) => self.store.sorted_by_priority(),
+        };
+
+        if tasks.is_empty() {
+            println!("Ничего не найдено");
+            return;
+        }
+
+        println!("\n📋 Задачи:");
         println!("{}", "─".repeat(50));
 
-        for task in self.store.list() {
+        for task in tasks {
             task.display();
         }
 
         println!("{}", "─".repeat(50));
-
         let (total, done) = self.store.stats();
         println!("Всего: {} | Выполнено: {}\n", total, done);
     }
@@ -343,28 +441,63 @@ impl App {
         match self.store.find_mut(id) {
             Some(task) => {
                 task.priority = level;
-                println!(
-                    "🔄 Задача #{}: приоритет → {} {}",
-                    id,
-                    level.icon(),
-                    level.label()
-                );
+                println!("🔄 Приоритет #{} → {}", id, level.icon());
             }
             None => println!("Задача #{} не найдена", id),
         }
+    }
+
+    fn cmd_tag(&mut self, id: u32, tag: String) {
+        match self.store.find_mut(id) {
+            Some(task) => {
+                task.add_tag(tag.clone());
+                println!("🏷 Задача #{} + #{}", id, tag);
+            }
+            None => println!("Задача #{} не найдена", id),
+        }
+    }
+
+    fn cmd_stats(&self) {
+        let (total, done) = self.store.stats();
+
+        println!("\n📊 Статистика:");
+        println!("{}", "─".repeat(30));
+        println!("Всего задач: {}", total);
+        println!(
+            "Выполнено: {} ({}%)",
+            done,
+            if total > 0 { done * 100 / total } else { 0 }
+        );
+        println!("Активных: {}", total - done);
+
+        // Статистика по приоритетам
+        let priority_stats = self.store.priority_stats();
+        if !priority_stats.is_empty() {
+            println!("\nПо приоритетам:");
+            for (priority, count) in &priority_stats {
+                println!("  {} : {}", priority.icon(), count);
+            }
+        }
+
+        // Статистика по тегам
+        let tag_stats = self.store.tag_stats();
+        if !tag_stats.is_empty() {
+            println!("\nПо тегам:");
+            for (tag, count) in &tag_stats {
+                println!("  #{}: {}", tag, count);
+            }
+        }
+
+        println!();
     }
 
     fn cmd_remove(&mut self, id: u32) {
         match self.store.remove(id) {
-            Some(task) => {
-                println!("🗑 Удалена: #{} '{}'", task.id, task.text)
-            }
+            Some(task) => println!("🗑 Удалена: #{} '{}'", task.id, task.text),
             None => println!("Задача #{} не найдена", id),
         }
     }
 }
-
-// ============ Точка входа ============
 
 fn main() {
     let mut app = App::new();
