@@ -1,11 +1,12 @@
-use super::{Command, ListFilter, ParseError};
+use super::{Command, ListFilter};
+use crate::error::{AppError, Result};
 use crate::task::Priority;
 
-pub fn parse(input: &str) -> Result<Command, ParseError> {
+pub fn parse(input: &str) -> Result<Command> {
     let input = input.trim();
 
     if input.is_empty() {
-        return Err(ParseError::EmptyInput);
+        return Ok(Command::Empty);
     }
 
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
@@ -17,7 +18,7 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
 
         "add" | "a" => {
             if args.is_empty() {
-                Err(ParseError::MissingArgument("текст"))
+                Err(AppError::MissingArgument("текст задачи"))
             } else {
                 Ok(Command::Add {
                     text: args.to_string(),
@@ -26,7 +27,7 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
         }
 
         "list" | "ls" => {
-            let filter = parse_list_filter(args)?;
+            let filter = parse_filter(args)?;
             Ok(Command::List { filter })
         }
 
@@ -54,26 +55,23 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
 
         "quit" | "q" => Ok(Command::Quit),
 
-        other => Err(ParseError::UnknownCommand(other.to_string())),
+        other => Err(AppError::UnknownCommand(other.to_string())),
     }
 }
 
-fn parse_id(s: &str) -> Result<u32, ParseError> {
-    s.trim().parse().map_err(|_| ParseError::InvalidId)
+fn parse_id(s: &str) -> Result<u32> {
+    s.trim().parse().map_err(|_| AppError::InvalidId)
 }
 
-fn parse_list_filter(args: &str) -> Result<Option<ListFilter>, ParseError> {
+fn parse_filter(args: &str) -> Result<Option<ListFilter>> {
     let filter = match args.trim() {
         "" => None,
         "done" => Some(ListFilter::Done),
         "pending" | "todo" => Some(ListFilter::Pending),
         "sorted" | "sort" => Some(ListFilter::Sorted),
         arg if arg.starts_with("p:") => {
-            let p = arg[2..]
-                .parse::<u8>()
-                .ok()
-                .and_then(Priority::from_u8)
-                .ok_or(ParseError::InvalidPriority)?;
+            let n: u8 = arg[2..].parse().map_err(|_| AppError::InvalidPriority(0))?;
+            let p = Priority::from_u8(n).ok_or(AppError::InvalidPriority(n))?;
             Some(ListFilter::Priority(p))
         }
         arg if arg.starts_with('#') => Some(ListFilter::Tag(arg[1..].to_string())),
@@ -82,28 +80,25 @@ fn parse_list_filter(args: &str) -> Result<Option<ListFilter>, ParseError> {
     Ok(filter)
 }
 
-fn parse_priority_args(args: &str) -> Result<(u32, Priority), ParseError> {
+fn parse_priority_args(args: &str) -> Result<(u32, Priority)> {
     let parts: Vec<&str> = args.split_whitespace().collect();
 
     if parts.len() < 2 {
-        return Err(ParseError::MissingArgument("id и приоритет"));
+        return Err(AppError::MissingArgument("id и приоритет"));
     }
 
     let id = parse_id(parts[0])?;
-    let level = parts[1]
-        .parse::<u8>()
-        .ok()
-        .and_then(Priority::from_u8)
-        .ok_or(ParseError::InvalidPriority)?;
+    let n: u8 = parts[1].parse().map_err(|_| AppError::InvalidPriority(0))?;
+    let level = Priority::from_u8(n).ok_or(AppError::InvalidPriority(n))?;
 
     Ok((id, level))
 }
 
-fn parse_tag_args(args: &str) -> Result<(u32, String), ParseError> {
+fn parse_tag_args(args: &str) -> Result<(u32, String)> {
     let parts: Vec<&str> = args.split_whitespace().collect();
 
     if parts.len() < 2 {
-        return Err(ParseError::MissingArgument("id и тег"));
+        return Err(AppError::MissingArgument("id и тег"));
     }
 
     let id = parse_id(parts[0])?;

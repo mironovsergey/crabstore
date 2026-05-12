@@ -1,27 +1,29 @@
 mod commands;
+mod error;
 mod store;
 mod task;
 
 use std::io::{self, Write};
 
-use commands::{Command, CommandResult, ListFilter, parse};
+use commands::{Command, ListFilter, parse};
+use error::Result;
 use store::TaskStore;
 use task::Priority;
 
 const VERSION: &str = "0.1.0";
+const DATA_FILE: &str = "crabstore.json";
 
 struct App {
     store: TaskStore,
 }
 
 impl App {
-    fn new() -> Self {
-        Self {
-            store: TaskStore::new(),
-        }
+    fn new() -> Result<Self> {
+        let store = TaskStore::load_or_create(DATA_FILE)?;
+        Ok(Self { store })
     }
 
-    fn run(&mut self) {
+    fn run(&mut self) -> Result<()> {
         self.show_welcome();
 
         loop {
@@ -29,20 +31,45 @@ impl App {
                 continue;
             };
 
-            match parse(&input) {
-                Ok(cmd) => {
-                    if let CommandResult::Quit = self.execute(cmd) {
-                        break;
-                    }
-                }
-                Err(e) => println!("{}", e.message()),
+            match self.process(&input) {
+                Ok(true) => break, // quit
+                Ok(false) => {}    // continue
+                Err(e) => println!("❌ {}", e),
             }
         }
+
+        Ok(())
+    }
+
+    fn process(&mut self, input: &str) -> Result<bool> {
+        let cmd = parse(input)?;
+
+        match cmd {
+            Command::Empty => {}
+            Command::Help => self.cmd_help(),
+            Command::Add { text } => self.cmd_add(text)?,
+            Command::List { filter } => self.cmd_list(filter),
+            Command::Done { id } => self.cmd_done(id)?,
+            Command::Priority { id, level } => self.cmd_priority(id, level)?,
+            Command::Tag { id, tag } => self.cmd_tag(id, tag)?,
+            Command::Stats => self.cmd_stats(),
+            Command::Remove { id } => self.cmd_remove(id)?,
+            Command::Quit => {
+                println!("До встречи! 👋");
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
     }
 
     fn show_welcome(&self) {
         println!("🦀 crabstore v{}", VERSION);
-        println!("Введите 'help' для списка команд\n");
+        let (total, done) = self.store.stats();
+        if total > 0 {
+            println!("📂 Загружено задач: {} (выполнено: {})", total, done);
+        }
+        println!("Введите 'help' для справки\n");
     }
 
     fn read_input(&self) -> Option<String> {
@@ -54,21 +81,6 @@ impl App {
         Some(input)
     }
 
-    fn execute(&mut self, cmd: Command) -> CommandResult {
-        match cmd {
-            Command::Help => self.cmd_help(),
-            Command::Add { text } => self.cmd_add(text),
-            Command::List { filter } => self.cmd_list(filter),
-            Command::Done { id } => self.cmd_done(id),
-            Command::Priority { id, level } => self.cmd_priority(id, level),
-            Command::Tag { id, tag } => self.cmd_tag(id, tag),
-            Command::Stats => self.cmd_stats(),
-            Command::Remove { id } => self.cmd_remove(id),
-            Command::Quit => return CommandResult::Quit,
-        }
-        CommandResult::Continue
-    }
-
     fn cmd_help(&self) {
         println!("Команды:");
         println!("  add, a <текст>          — добавить задачу");
@@ -76,7 +88,7 @@ impl App {
         println!("    list done             — только выполненные");
         println!("    list pending          — только активные");
         println!("    list sorted           — по приоритету");
-        println!("    list p:3              — по приоритету 3");
+        println!("    list p:N              — по приоритету N");
         println!("    list #tag             — по тегу");
         println!("  done, d <id>            — отметить выполненной");
         println!("  priority, p <id> <1-4>  — установить приоритет");
@@ -86,14 +98,15 @@ impl App {
         println!("  quit, q                 — выход");
     }
 
-    fn cmd_add(&mut self, text: String) {
-        let task = self.store.add(text);
+    fn cmd_add(&mut self, text: String) -> Result<()> {
+        let task = self.store.add(text)?;
         println!("➕ Добавлена: #{} '{}'", task.id, task.text);
+        Ok(())
     }
 
     fn cmd_list(&self, filter: Option<ListFilter>) {
         if self.store.is_empty() {
-            println!("Задач нет. Добавьте: add <текст>");
+            println!("Задач нет");
             return;
         }
 
@@ -113,44 +126,35 @@ impl App {
 
         println!("\n📋 Задачи:");
         println!("{}", "─".repeat(50));
-
         for task in tasks {
             task.display();
         }
-
         println!("{}", "─".repeat(50));
+
         let (total, done) = self.store.stats();
         println!("Всего: {} | Выполнено: {}\n", total, done);
     }
 
-    fn cmd_done(&mut self, id: u32) {
-        match self.store.find_mut(id) {
-            Some(task) => {
-                task.complete();
-                println!("✓ Задача #{} выполнена", id);
-            }
-            None => println!("Задача #{} не найдена", id),
-        }
+    fn cmd_done(&mut self, id: u32) -> Result<()> {
+        self.store.update(id, |task| task.done = true)?;
+        println!("✓ Задача #{} выполнена", id);
+        Ok(())
     }
 
-    fn cmd_priority(&mut self, id: u32, level: Priority) {
-        match self.store.find_mut(id) {
-            Some(task) => {
-                task.set_priority(level);
-                println!("🔄 Приоритет #{} → {}", id, level.icon());
-            }
-            None => println!("Задача #{} не найдена", id),
-        }
+    fn cmd_priority(&mut self, id: u32, level: Priority) -> Result<()> {
+        self.store.update(id, |task| task.priority = level)?;
+        println!("🔄 Приоритет #{} → {}", id, level.icon());
+        Ok(())
     }
 
-    fn cmd_tag(&mut self, id: u32, tag: String) {
-        match self.store.find_mut(id) {
-            Some(task) => {
-                task.add_tag(tag.clone());
-                println!("🏷 Задача #{} + #{}", id, tag);
+    fn cmd_tag(&mut self, id: u32, tag: String) -> Result<()> {
+        self.store.update(id, |task| {
+            if !task.tags.contains(&tag) {
+                task.tags.push(tag.clone());
             }
-            None => println!("Задача #{} не найдена", id),
-        }
+        })?;
+        println!("🏷 Задача #{} + #{}", id, tag);
+        Ok(())
     }
 
     fn cmd_stats(&self) {
@@ -183,19 +187,21 @@ impl App {
                 println!("  #{}: {}", tag, count);
             }
         }
-
         println!();
     }
 
-    fn cmd_remove(&mut self, id: u32) {
-        match self.store.remove(id) {
-            Some(task) => println!("🗑 Удалена: #{} '{}'", task.id, task.text),
-            None => println!("Задача #{} не найдена", id),
-        }
+    fn cmd_remove(&mut self, id: u32) -> Result<()> {
+        let task = self.store.remove(id)?;
+        println!("🗑 Удалена: #{} '{}'", task.id, task.text);
+        Ok(())
     }
 }
 
 fn main() {
-    let mut app = App::new();
-    app.run();
+    let result = App::new().and_then(|mut app| app.run());
+
+    if let Err(e) = result {
+        eprintln!("Критическая ошибка: {}", e);
+        std::process::exit(1);
+    }
 }

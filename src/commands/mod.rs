@@ -2,11 +2,12 @@ mod parser;
 
 use crate::task::Priority;
 
-pub use parser::parse; // реэкспорт функции parse
+pub use parser::parse;
 
 /// Команда пользователя
 #[derive(Debug)]
 pub enum Command {
+    Empty,
     Help,
     Add { text: String },
     List { filter: Option<ListFilter> },
@@ -26,36 +27,4 @@ pub enum ListFilter {
     Priority(Priority),
     Tag(String),
     Sorted,
-}
-
-/// Ошибка парсинга команды
-#[derive(Debug)]
-pub enum ParseError {
-    EmptyInput,
-    UnknownCommand(String),
-    MissingArgument(&'static str),
-    InvalidId,
-    InvalidPriority,
-}
-
-impl ParseError {
-    pub fn message(&self) -> String {
-        match self {
-            ParseError::EmptyInput => "Введите команду".to_string(),
-            ParseError::UnknownCommand(cmd) => {
-                format!("Неизвестная команда: '{}'", cmd)
-            }
-            ParseError::MissingArgument(arg) => {
-                format!("Не указан аргумент: {}", arg)
-            }
-            ParseError::InvalidId => "Неверный ID".to_string(),
-            ParseError::InvalidPriority => "Приоритет: 1-4".to_string(),
-        }
-    }
-}
-
-/// Результат выполнения команды
-pub enum CommandResult {
-    Continue,
-    Quit,
 }

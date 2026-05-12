@@ -1,5 +1,6 @@
-/// Приоритет задачи
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Priority {
     Low = 1,
     Normal = 2,
@@ -28,13 +29,13 @@ impl Priority {
     }
 }
 
-/// Задача
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: u32,
     pub text: String,
     pub done: bool,
     pub priority: Priority,
+    #[serde(default)]
     pub tags: Vec<String>,
 }
 
@@ -51,7 +52,7 @@ impl Task {
 
     pub fn display(&self) {
         let status = if self.done { "✓" } else { "○" };
-        let tags_str = if self.tags.is_empty() {
+        let tags = if self.tags.is_empty() {
             String::new()
         } else {
             format!(" [{}]", self.tags.join(", "))
@@ -63,25 +64,7 @@ impl Task {
             self.priority.icon(),
             self.id,
             self.text,
-            tags_str
+            tags
         );
-    }
-
-    pub fn complete(&mut self) {
-        self.done = true;
-    }
-
-    pub fn set_priority(&mut self, priority: Priority) {
-        self.priority = priority;
-    }
-
-    pub fn add_tag(&mut self, tag: String) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
-        }
-    }
-
-    pub fn has_tag(&self, tag: &str) -> bool {
-        self.tags.iter().any(|t| t == tag)
     }
 }
